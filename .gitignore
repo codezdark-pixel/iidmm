@@ -1,0 +1,5 @@
+node_modules/
+.env
+frost.db
+frost.db-shm
+frost.db-wal
