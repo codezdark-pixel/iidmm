@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  normalizeChain, validateWalletAddress, validateTransactionHash,
+  normalizeChain, validateWalletAddress, inferWalletChain, validateTransactionHash,
   parseConversionAmount, convertValue
 } = require('../src/crypto-tools');
 
@@ -27,6 +27,12 @@ test('validates wallet addresses by chain family', () => {
   assert.equal(validateWalletAddress('btc', 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh'), 'btc-mainnet');
   assert.throws(() => validateWalletAddress('eth', 'not-an-address'), /EVM wallet addresses/);
   assert.throws(() => validateWalletAddress('btc', 'not-an-address'), /Bitcoin mainnet/);
+});
+
+test('infers supported wallet networks from address format without a chain argument', () => {
+  assert.equal(inferWalletChain(`0x${'a'.repeat(40)}`), 'evm-all');
+  assert.equal(inferWalletChain('bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh'), 'btc-mainnet');
+  assert.throws(() => inferWalletChain('unknown-wallet-format'), /Unsupported address format/);
 });
 
 test('validates transaction hashes and chain names', () => {

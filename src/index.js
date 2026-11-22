@@ -91,7 +91,7 @@ function helpContainer(category = 'home', canAccessStaffHelp = false) {
       `> ${emojis.stararrow} \`=bal\` ${emojis.hyphen} View balances for your saved wallets.`,
       `> ${emojis.stararrow} \`=convert <amount> <from> <to>\` ${emojis.hyphen} Convert crypto and fiat values.`,
       `> ${emojis.stararrow} \`=price <crypto>\` ${emojis.hyphen} Live cryptocurrency price.`,
-      `> ${emojis.stararrow} \`=txid <chain> <hash>\` ${emojis.hyphen} Look up transaction details.`,
+      `> ${emojis.stararrow} \`=txid <chain> <hash>\` ${emojis.hyphen} Look up transaction details (staff only).`,
       `> ${emojis.stararrow} \`=wallet <address>\` ${emojis.hyphen} Save a wallet; EVM and Bitcoin addresses are detected automatically.`,
       `> ${emojis.stararrow} \`=wallet list|remove <address|all>\` ${emojis.hyphen} Manage your saved wallets.`,
       '-# Page 1/1',
@@ -352,7 +352,7 @@ const helpSearchEntries = [
   ['=bal', 'View on-chain balances for your saved wallets'],
   ['=convert <amount> <from> <to>', 'Convert between supported crypto assets and fiat currencies'],
   ['=price <crypto>', 'View the live crypto price in USD and INR'],
-  ['=txid <chain> <hash>', 'Look up transaction details on a supported chain'],
+  ['=txid <chain> <hash>', 'Look up transaction details on a supported chain', true],
   ['=wallet <address>', 'Save an EVM or Bitcoin wallet address for on-chain balance lookup'],
   ['.profile / .p', 'Show your profile'],
   ['.calc <expression>', 'Calculate a math expression'],
@@ -399,7 +399,7 @@ async function handleCryptoCommand(message, command, args) {
   if (command === 'bal') {
     if (!message.guild) throw new Error('Crypto wallets are configured per server.');
     const wallets = db.getCryptoWallets(message.guild.id, message.author.id);
-    if (!wallets.length) throw new Error('You have no saved wallets. Use `=wallet <chain> <address>` first.');
+    if (!wallets.length) throw new Error('You have no saved wallets. Use `=wallet <address>` first.');
     const results = await Promise.all(wallets.map(async wallet => ({
       wallet,
       items: await getWalletBalances(wallet.chain, wallet.address)
@@ -416,10 +416,12 @@ async function handleCryptoCommand(message, command, args) {
       const title = wallet.chain === 'evm-all' ? 'All supported EVM networks' : 'Bitcoin';
       return `### ${title}\n${shown.join('\n') || '> No token balances found.'}`;
     });
-    return message.reply(componentV2Payload(responseContainer([
+    const balanceContainer = responseContainer([
       `## ${emojis.rocket} Crypto Balances for ${message.author}`,
       ...sections
-    ].join('\n\n'))));
+    ].join('\n\n'));
+    await message.author.send(componentV2Payload(balanceContainer));
+    return message.reply(componentV2Payload(responseContainer('Your crypto balances were sent to you in a direct message.')));
   }
 
   if (command === 'price') {
@@ -455,6 +457,9 @@ async function handleCryptoCommand(message, command, args) {
   }
 
   if (command === 'txid') {
+    if (!hasStaffHelpAccess(message.member, staffRoles)) {
+      throw new Error('The `=txid` command is only available to staff.');
+    }
     if (args.length !== 2) throw new Error('Usage: `=txid <chain> <hash>` (for example, `=txid eth 0x…`).');
     const chain = validateTransactionHash(args[0], args[1]);
     const transaction = await getTransaction(chain, args[1]);

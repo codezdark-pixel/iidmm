@@ -1,3 +1,5 @@
+const { cryptoIds } = require('./rates');
+
 const chainAliases = {
   eth: 'eth-mainnet',
   ethereum: 'eth-mainnet',
@@ -73,8 +75,6 @@ function parseConversionAmount(value) {
 function convertValue(amount, from, to, rates) {
   const source = String(from).toUpperCase();
   const target = String(to).toUpperCase();
-  if (source === target) return amount;
-
   const sourceCrypto = cryptoSymbols.has(source);
   const targetCrypto = cryptoSymbols.has(target);
   const sourceFiat = fiatSymbols.has(source);
@@ -82,6 +82,7 @@ function convertValue(amount, from, to, rates) {
   if ((!sourceCrypto && !sourceFiat) || (!targetCrypto && !targetFiat)) {
     throw new Error('Unsupported currency or crypto symbol.');
   }
+  if (source === target) return amount;
   if (sourceCrypto && !cryptoIds[source]) {
     throw new Error(`Unsupported crypto symbol: ${source}.`);
   }
@@ -125,4 +126,3 @@ module.exports = {
   normalizeChain, validateWalletAddress, inferWalletChain, validateTransactionHash, parseConversionAmount,
   convertValue, formatCryptoValue, formatFiatValue
 };
-const { cryptoIds } = require('./rates');

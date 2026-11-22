@@ -42,10 +42,18 @@ npm start
 - `=staff hire @member` and `=staff hire <inr|pp> @member`
 - `=staff <break|restrict|retire|suspend> @member`
 - `=staff <resume|unrestrict|unretire|unsuspend> @member`
+- `=wallet <address>` — save a wallet; `0x…` addresses are checked across supported EVM networks and Bitcoin address formats are detected automatically.
+- `=wallet list`, `=wallet remove <address|all>` — manage saved wallets.
+- `=bal` — privately DM on-chain balances for saved EVM/Bitcoin wallets.
+- `=price <crypto>` — live USD and INR price for supported crypto symbols.
+- `=convert <amount> <from> <to>` — convert between supported crypto assets and fiat currencies.
+- `=txid <chain> <hash>` — staff-only transaction lookup on a supported chain.
 
 UPI IDs are stored per member and server. `=listupi` only sends the caller's own ID by DM. Staff commands require the caller and bot to have **Manage Roles**, and the bot's role must be above the target. Configure role IDs in `staff-roles.json`: a dedicated `staff` role for staff-only help access; the general exchanger role; optional INR/PayPal market roles; and the break/restricted/retired/suspended status roles. A staff status command removes the member's configured exchanger roles and adds that status's dedicated role. Its matching restore command removes the status role and restores the exact exchanger roles saved when the status was applied.
 
-The bot uses `.` for exchange/profile commands and `=` for assistant/UPI commands. Help category dropdowns remain interactive.
+Crypto price/conversion and wallet commands are available to everyone; `=txid` is restricted to members with the dedicated staff role. Price/conversion commands use CoinGecko and Frankfurter rates. On-chain wallet balance and transaction lookups use GoldRush and require `GOLDRUSH_API_KEY` in `.env` (see `.env.example`). Wallet address inference supports EVM `0x…` addresses across GoldRush's multichain EVM balance endpoint and Bitcoin mainnet address formats. EVM addresses do not encode one specific chain, so `=bal` checks the supported EVM networks together. `=txid` requires a chain name because a transaction hash alone does not identify a network.
+
+The bot uses `.` for exchange/profile commands and `=` for assistant, UPI, and crypto commands. Help category dropdowns remain interactive.
 The public help menu shows profile/stats and calculator pages to regular members. The Extra and UPI help pages are visible only to members with the dedicated `staff` role configured in `staff-roles.json`; exchanger and status roles do not grant this access.
 
 The SQLite database is stored locally. CoinGecko and Frankfurter rates are cached for 60 seconds. Balance values are local demo values unless connected to your existing exchange account system.
