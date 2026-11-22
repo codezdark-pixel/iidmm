@@ -1,0 +1,14 @@
+{
+  "staff": "",
+  "exchanger": "",
+  "markets": {
+    "inr": "",
+    "pp": ""
+  },
+  "statuses": {
+    "break": "",
+    "restricted": "",
+    "retired": "",
+    "suspended": ""
+  }
+}

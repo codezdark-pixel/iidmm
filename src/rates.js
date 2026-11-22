@@ -38,20 +38,43 @@ function parseAmount(text) {
   return amount;
 }
 
-async function cryptoToInr(amount, symbol = 'USDT') {
-  const rates = await getRates();
-  const id = cryptoIds[symbol.toUpperCase()] || cryptoIds.USDT;
-  const quote = rates.crypto[id];
-  if (!quote) throw new Error(`No live rate available for ${symbol.toUpperCase()}.`);
-  return { result: amount * quote.inr, source: 'CoinGecko + INR FX', symbol: '₹' };
+function getC2iRateTier(amount, usdPrice) {
+  return amount * usdPrice >= 100 ? 'above100' : 'below100';
 }
 
-async function inrToCrypto(amount, symbol = 'USDT') {
+function applyPercentageFee(amount, feePercentage) {
+  if (!Number.isFinite(feePercentage) || feePercentage < 0 || feePercentage > 100) {
+    throw new Error('Percentage fee must be between 0 and 100.');
+  }
+  return amount * (1 - feePercentage / 100);
+}
+
+async function cryptoToInr(amount, symbol = 'USDT', i2cRate) {
   const rates = await getRates();
   const id = cryptoIds[symbol.toUpperCase()] || cryptoIds.USDT;
   const quote = rates.crypto[id];
   if (!quote) throw new Error(`No live rate available for ${symbol.toUpperCase()}.`);
-  return { result: amount / quote.inr, source: 'CoinGecko + INR FX', symbol: symbol.toUpperCase() };
+  const liveI2cRate = rates.fiat.INR || quote.inr / quote.usd;
+  return {
+    result: i2cRate ? amount * quote.usd * i2cRate : amount * quote.inr,
+    source: 'CoinGecko + INR FX',
+    symbol: '₹',
+    i2cRate: i2cRate || liveI2cRate
+  };
+}
+
+async function inrToCrypto(amount, symbol = 'USDT', i2cRate) {
+  const rates = await getRates();
+  const id = cryptoIds[symbol.toUpperCase()] || cryptoIds.USDT;
+  const quote = rates.crypto[id];
+  if (!quote) throw new Error(`No live rate available for ${symbol.toUpperCase()}.`);
+  const liveI2cRate = rates.fiat.INR || quote.inr / quote.usd;
+  return {
+    result: i2cRate ? amount / (quote.usd * i2cRate) : amount / quote.inr,
+    source: 'CoinGecko + INR FX',
+    symbol: symbol.toUpperCase(),
+    i2cRate: i2cRate || liveI2cRate
+  };
 }
 
 async function cryptoToCrypto(amount, from = 'USDT', to = 'BTC') {
@@ -64,4 +87,7 @@ async function cryptoToCrypto(amount, from = 'USDT', to = 'BTC') {
   return { result: amount * fromQuote.usd / toQuote.usd, source: 'CoinGecko live spot', symbol: to.toUpperCase() };
 }
 
-module.exports = { getRates, parseAmount, cryptoToInr, inrToCrypto, cryptoToCrypto, cryptoIds };
+module.exports = {
+  getRates, parseAmount, getC2iRateTier, applyPercentageFee,
+  cryptoToInr, inrToCrypto, cryptoToCrypto, cryptoIds
+};

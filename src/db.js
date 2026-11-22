@@ -9,12 +9,37 @@ db.exec(`
     id TEXT PRIMARY KEY,
     username TEXT NOT NULL,
     balance REAL NOT NULL DEFAULT 0,
-    cashback REAL NOT NULL DEFAULT 0,
-    spins INTEGER NOT NULL DEFAULT 0,
-    last_spin TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value REAL NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS upi_accounts (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    upi_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (guild_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS staff_role_snapshots (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    role_ids TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (guild_id, user_id)
+  );
 `);
+
+for (const column of ['cashback', 'spins', 'last_spin']) {
+  if (db.pragma('table_info(users)').some(({ name }) => name === column)) {
+    db.exec(`ALTER TABLE users DROP COLUMN ${column}`);
+  }
+}
 
 function ensureUser(user) {
   db.prepare(`INSERT OR IGNORE INTO users (id, username) VALUES (?, ?)`).run(user.id, user.username);
@@ -22,27 +47,70 @@ function ensureUser(user) {
   return db.prepare(`SELECT * FROM users WHERE id = ?`).get(user.id);
 }
 
-function addCashback(id, amount) {
-  db.prepare(`UPDATE users SET cashback = cashback + ? WHERE id = ?`).run(amount, id);
-}
-
 function addBalance(id, amount) {
   db.prepare(`UPDATE users SET balance = balance + ? WHERE id = ?`).run(amount, id);
 }
 
-function addSpins(id, amount) {
-  db.prepare(`UPDATE users SET spins = spins + ? WHERE id = ?`).run(amount, id);
-}
-
-function redeemSpins(id) {
-  const user = db.prepare(`SELECT * FROM users WHERE id = ?`).get(id);
-  if (!user || user.spins < 1) return null;
-  db.prepare(`UPDATE users SET spins = spins - 1, balance = balance + 100 WHERE id = ?`).run(id);
-  return 100;
-}
-
 function leaderboard(limit = 10) {
-  return db.prepare(`SELECT * FROM users ORDER BY balance DESC, cashback DESC LIMIT ?`).all(limit);
+  return db.prepare(`SELECT * FROM users ORDER BY balance DESC LIMIT ?`).all(limit);
 }
 
-module.exports = { db, ensureUser, addCashback, addBalance, addSpins, redeemSpins, leaderboard };
+function getI2cRate() {
+  return getExchangeRate('i2c');
+}
+
+function setI2cRate(value) {
+  setExchangeRate('i2c', value);
+}
+
+function getExchangeRate(method) {
+  const key = method.toLowerCase() === 'i2c' ? 'i2c_rate' : `exchange_rate:${method.toLowerCase()}`;
+  return db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key)?.value ?? null;
+}
+
+function setExchangeRate(method, value) {
+  const key = method.toLowerCase() === 'i2c' ? 'i2c_rate' : `exchange_rate:${method.toLowerCase()}`;
+  db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
+}
+
+function getUpiId(guildId, userId) {
+  return db.prepare('SELECT upi_id FROM upi_accounts WHERE guild_id = ? AND user_id = ?')
+    .get(guildId, userId)?.upi_id ?? null;
+}
+
+function setUpiId(guildId, userId, upiId) {
+  db.prepare(`
+    INSERT INTO upi_accounts (guild_id, user_id, upi_id) VALUES (?, ?, ?)
+    ON CONFLICT(guild_id, user_id) DO UPDATE SET upi_id = excluded.upi_id, created_at = CURRENT_TIMESTAMP
+  `).run(guildId, userId, upiId);
+}
+
+function removeUpiId(guildId, userId) {
+  return db.prepare('DELETE FROM upi_accounts WHERE guild_id = ? AND user_id = ?')
+    .run(guildId, userId).changes > 0;
+}
+
+function getStaffRoleSnapshot(guildId, userId) {
+  const row = db.prepare(`
+    SELECT status, role_ids FROM staff_role_snapshots WHERE guild_id = ? AND user_id = ?
+  `).get(guildId, userId);
+  return row ? { status: row.status, roleIds: JSON.parse(row.role_ids) } : null;
+}
+
+function saveStaffRoleSnapshot(guildId, userId, status, roleIds) {
+  db.prepare(`
+    INSERT INTO staff_role_snapshots (guild_id, user_id, status, role_ids)
+    VALUES (?, ?, ?, ?)
+  `).run(guildId, userId, status, JSON.stringify(roleIds));
+}
+
+function removeStaffRoleSnapshot(guildId, userId) {
+  db.prepare('DELETE FROM staff_role_snapshots WHERE guild_id = ? AND user_id = ?').run(guildId, userId);
+}
+
+module.exports = {
+  db, ensureUser, addBalance, leaderboard,
+  getI2cRate, setI2cRate, getExchangeRate, setExchangeRate,
+  getUpiId, setUpiId, removeUpiId,
+  getStaffRoleSnapshot, saveStaffRoleSnapshot, removeStaffRoleSnapshot
+};
