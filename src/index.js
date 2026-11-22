@@ -14,6 +14,12 @@ const { createCalculatorContainer } = require('./calculator-container');
 const { createProfileContainer } = require('./profile-container');
 const { isValidUpiId, buildUpiPaymentUri, parseUpiAmount } = require('./upi');
 const { hasStaffHelpAccess } = require('./help-access');
+const {
+  normalizeChain, inferWalletChain, validateTransactionHash,
+  parseConversionAmount, convertValue, formatCryptoValue, formatFiatValue,
+  cryptoSymbols
+} = require('./crypto-tools');
+const { getWalletBalances, getTransaction, normalizeBalance, formatTransaction } = require('./crypto-api');
 const emojis = require('../emoji.json');
 const staffRoles = require('../staff-roles.json');
 
@@ -77,6 +83,22 @@ function helpContainer(category = 'home', canAccessStaffHelp = false) {
     ].join('\n'), { actionRows: helpComponents(category, canAccessStaffHelp) });
   }
 
+  if (category === 'crypto') {
+    return createContainer([
+      `## ${emojis.rocket} Crypto`,
+      '> Cryptocurrency rates, conversions, balances & txids',
+      '',
+      `> ${emojis.stararrow} \`=bal\` ${emojis.hyphen} View balances for your saved wallets.`,
+      `> ${emojis.stararrow} \`=convert <amount> <from> <to>\` ${emojis.hyphen} Convert crypto and fiat values.`,
+      `> ${emojis.stararrow} \`=price <crypto>\` ${emojis.hyphen} Live cryptocurrency price.`,
+      `> ${emojis.stararrow} \`=txid <chain> <hash>\` ${emojis.hyphen} Look up transaction details.`,
+      `> ${emojis.stararrow} \`=wallet <address>\` ${emojis.hyphen} Save a wallet; EVM and Bitcoin addresses are detected automatically.`,
+      `> ${emojis.stararrow} \`=wallet list|remove <address|all>\` ${emojis.hyphen} Manage your saved wallets.`,
+      '-# Page 1/1',
+      footer
+    ].join('\n'), { actionRows: helpComponents(category, canAccessStaffHelp) });
+  }
+
   if (category === 'profile') {
     return createContainer([
         `### ${emojis.icons8cutenote100} **Member Profile**`,
@@ -117,11 +139,12 @@ function helpContainer(category = 'home', canAccessStaffHelp = false) {
     '-# Public commands and utilities available to server members.',
     '',
     `> ### ${emojis.icons8cutebluecursor100} **Prefixes & Usage**`,
-    '> - **Prefixes:** `.` for exchange/profile tools; `=` for assistant and UPI tools.',
+    '> - **Prefixes:** `.` for exchange/profile tools; `=` for assistant, UPI, and crypto tools.',
     '',
     `> ### ${emojis.icons8cuteopenbook100} **Available Categories**`,
     `> - ${emojis.icons8cutenote100} **Stats & Profiles:** Profile card, balance, and leaderboard`,
-    `> - ${emojis.coins} **Calculator & Utilities:** Crypto calculations, guides, and ToS`
+    `> - ${emojis.coins} **Calculator & Utilities:** Crypto calculations, guides, and ToS`,
+    `> - ${emojis.rocket} **Crypto:** Live prices, conversions, wallet balances, and transaction lookups`
   ];
   if (canAccessStaffHelp) {
     categories.push(
@@ -152,6 +175,7 @@ function helpComponents(category = 'home', canAccessStaffHelp = false) {
       { label: 'Home', value: 'home', description: 'Member help directory', default: category === 'home' },
       { label: 'Member Profile', value: 'profile', description: 'Profile commands', default: category === 'profile' },
       { label: 'Calculators', value: 'calculators', description: 'Conversions and math tools', default: category === 'calculators' },
+      { label: 'Crypto', value: 'crypto', description: 'Prices, conversions, balances, and transactions', default: category === 'crypto' },
       ...(canAccessStaffHelp ? [
         { label: 'Extra', value: 'extra', description: 'Staff assistant features and help menu', default: category === 'extra' },
         { label: 'UPI', value: 'upi', description: 'UPI payment management and QR generation', default: category === 'upi' }
@@ -325,10 +349,121 @@ const helpSearchEntries = [
   ['=removeupi', 'Delete your saved UPI ID', true],
   ['=setupi <upi-id>', 'Save or update your UPI ID', true],
   ['=upi', 'Share your saved UPI ID', true],
+  ['=bal', 'View on-chain balances for your saved wallets'],
+  ['=convert <amount> <from> <to>', 'Convert between supported crypto assets and fiat currencies'],
+  ['=price <crypto>', 'View the live crypto price in USD and INR'],
+  ['=txid <chain> <hash>', 'Look up transaction details on a supported chain'],
+  ['=wallet <address>', 'Save an EVM or Bitcoin wallet address for on-chain balance lookup'],
   ['.profile / .p', 'Show your profile'],
   ['.calc <expression>', 'Calculate a math expression'],
   ...currencyMethods.map(method => [`.${method}`, `Convert using ${method.toUpperCase()}`])
 ];
+
+async function handleCryptoCommand(message, command, args) {
+  if (!message.guild) throw new Error('Crypto wallet commands can only be used in a server.');
+
+  if (command === 'wallet') {
+    const subcommand = args[0]?.toLowerCase();
+    if (subcommand === 'list') {
+      const wallets = db.getCryptoWallets(message.guild.id, message.author.id);
+      if (!wallets.length) throw new Error('You have no saved wallets. Use `=wallet <address>` first.');
+      const walletList = wallets.map(({ chain, address }) =>
+        `\`${chain === 'evm-all' ? 'EVM networks' : 'Bitcoin'}\` — \`${address}\``
+      ).join('\n');
+      await message.author.send(componentV2Payload(responseContainer(`Your saved crypto wallets:\n${walletList}`)));
+      return message.reply(componentV2Payload(responseContainer('Your wallet list was sent to you in a direct message.')));
+    }
+
+    if (subcommand === 'remove') {
+      if (!args[1]) throw new Error('Usage: `=wallet remove <address>` or `=wallet remove all`.');
+      if (args[1].toLowerCase() === 'all') {
+        const removed = db.removeAllCryptoWallets(message.guild.id, message.author.id);
+        if (!removed) throw new Error('You have no saved wallets to remove.');
+        return message.reply(componentV2Payload(responseContainer(`${emojis.tick} Removed all your saved wallets.`)));
+      }
+      const chain = inferWalletChain(args[1]);
+      if (!db.removeCryptoWallet(message.guild.id, message.author.id, chain)) {
+        throw new Error('You have no saved wallet for that address.');
+      }
+      return message.reply(componentV2Payload(responseContainer(`${emojis.tick} Removed your saved wallet.`)));
+    }
+
+    if (args.length !== 1) throw new Error('Usage: `=wallet <address>`, `=wallet list`, or `=wallet remove <address|all>`.');
+    const chain = inferWalletChain(args[0]);
+    db.setCryptoWallet(message.guild.id, message.author.id, chain, args[0]);
+    return message.reply(componentV2Payload(responseContainer(
+      `${emojis.tick} Saved your ${chain === 'evm-all' ? 'EVM' : 'Bitcoin'} wallet. Use \`=bal\` to check its balances.`
+    )));
+  }
+
+  if (command === 'bal') {
+    if (!message.guild) throw new Error('Crypto wallets are configured per server.');
+    const wallets = db.getCryptoWallets(message.guild.id, message.author.id);
+    if (!wallets.length) throw new Error('You have no saved wallets. Use `=wallet <chain> <address>` first.');
+    const results = await Promise.all(wallets.map(async wallet => ({
+      wallet,
+      items: await getWalletBalances(wallet.chain, wallet.address)
+    })));
+    const sections = results.map(({ wallet, items }) => {
+      const balances = items
+        .map(normalizeBalance)
+        .filter(item => item && item.balance > 0)
+        .sort((a, b) => b.usdValue - a.usdValue);
+      const shown = balances.slice(0, 8).map(item =>
+        `> ${formatCryptoValue(item.balance, item.symbol)}${item.chain ? ` on \`${item.chain}\`` : ''}${item.usdValue > 0 ? ` — $${item.usdValue.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : ''}`
+      );
+      if (balances.length > shown.length) shown.push(`> …and ${balances.length - 8} more assets`);
+      const title = wallet.chain === 'evm-all' ? 'All supported EVM networks' : 'Bitcoin';
+      return `### ${title}\n${shown.join('\n') || '> No token balances found.'}`;
+    });
+    return message.reply(componentV2Payload(responseContainer([
+      `## ${emojis.rocket} Crypto Balances for ${message.author}`,
+      ...sections
+    ].join('\n\n'))));
+  }
+
+  if (command === 'price') {
+    if (args.length !== 1) throw new Error('Usage: `=price <crypto>` (for example, `=price BTC`).');
+    const symbol = args[0].toUpperCase();
+    if (!cryptoSymbols.has(symbol)) throw new Error('Unsupported asset. Use BTC, ETH, USDT, USDC, LTC, SOL, XRP, DOGE, BNB, TRX, BCH, or AVAX.');
+    const ratesData = await rates.getRates();
+    const quote = ratesData.crypto[rates.cryptoIds[symbol]];
+    if (!quote) throw new Error(`No live price is available for ${symbol}.`);
+    return message.reply(componentV2Payload(responseContainer([
+      `## ${emojis.rocket} ${symbol} Price`,
+      `> **USD:** $${quote.usd.toLocaleString('en-US', { maximumFractionDigits: 8 })}`,
+      `> **INR:** ₹${quote.inr.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`
+    ].join('\n'))));
+  }
+
+  if (command === 'convert') {
+    if (args.length !== 3) throw new Error('Usage: `=convert <amount> <from> <to>` (for example, `=convert 1 BTC INR`).');
+    const amount = parseConversionAmount(args[0]);
+    const from = args[1].toUpperCase();
+    const to = args[2].toUpperCase();
+    const converted = convertValue(amount, from, to, await rates.getRates());
+    const formattedAmount = cryptoSymbols.has(from)
+      ? formatCryptoValue(amount, from)
+      : formatFiatValue(amount, from);
+    const formattedResult = cryptoSymbols.has(to)
+      ? formatCryptoValue(converted, to)
+      : formatFiatValue(converted, to);
+    return message.reply(componentV2Payload(responseContainer([
+      `## ${emojis.rocket} Crypto Conversion`,
+      `> **${formattedAmount}** → **${formattedResult}**`
+    ].join('\n'))));
+  }
+
+  if (command === 'txid') {
+    if (args.length !== 2) throw new Error('Usage: `=txid <chain> <hash>` (for example, `=txid eth 0x…`).');
+    const chain = validateTransactionHash(args[0], args[1]);
+    const transaction = await getTransaction(chain, args[1]);
+    return message.reply(componentV2Payload(responseContainer([
+      `## ${emojis.rocket} Transaction on \`${chain}\``,
+      formatTransaction(transaction)
+    ].join('\n'))));
+  }
+}
 
 function findMentionedUserId(message, args) {
   const mentioned = message.mentions.users.first();
@@ -580,6 +715,13 @@ async function handlePrefixMessage(message) {
       `- Memory usage: **${memoryMb.toFixed(1)} MB**`
     ].join('\n'))));
   }
+  if (['bal', 'convert', 'price', 'txid', 'wallet'].includes(command) && prefix === '=') {
+    try {
+      return await handleCryptoCommand(message, command, args);
+    } catch (error) {
+      return message.reply(componentV2Payload(responseContainer(`${emojis.cross} ${error.message}`)));
+    }
+  }
   if (command === 'staff') {
     try {
       return await handleStaffCommand(message, args);
@@ -670,7 +812,7 @@ client.on('interactionCreate', async interaction => {
       if (['extra', 'upi'].includes(category) && !canAccessStaff) {
         return interaction.update(componentV2Payload(helpContainer('home', false)));
       }
-      if (!['home', 'profile', 'calculators', 'extra', 'upi'].includes(category)) {
+      if (!['home', 'profile', 'calculators', 'crypto', 'extra', 'upi'].includes(category)) {
         return interaction.reply(componentV2Payload(responseContainer(
           `${emojis.cross} That help category is not available.`
         ), true));

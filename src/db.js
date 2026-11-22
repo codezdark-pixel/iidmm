@@ -33,6 +33,15 @@ db.exec(`
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (guild_id, user_id)
   );
+
+  CREATE TABLE IF NOT EXISTS crypto_wallets (
+    guild_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    chain TEXT NOT NULL,
+    address TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (guild_id, user_id, chain)
+  );
 `);
 
 for (const column of ['cashback', 'spins', 'last_spin']) {
@@ -108,9 +117,37 @@ function removeStaffRoleSnapshot(guildId, userId) {
   db.prepare('DELETE FROM staff_role_snapshots WHERE guild_id = ? AND user_id = ?').run(guildId, userId);
 }
 
+function getCryptoWallets(guildId, userId) {
+  return db.prepare(`
+    SELECT chain, address FROM crypto_wallets
+    WHERE guild_id = ? AND user_id = ? ORDER BY chain
+  `).all(guildId, userId);
+}
+
+function setCryptoWallet(guildId, userId, chain, address) {
+  db.prepare(`
+    INSERT INTO crypto_wallets (guild_id, user_id, chain, address) VALUES (?, ?, ?, ?)
+    ON CONFLICT(guild_id, user_id, chain)
+    DO UPDATE SET address = excluded.address, updated_at = CURRENT_TIMESTAMP
+  `).run(guildId, userId, chain, address);
+}
+
+function removeCryptoWallet(guildId, userId, chain) {
+  return db.prepare(`
+    DELETE FROM crypto_wallets WHERE guild_id = ? AND user_id = ? AND chain = ?
+  `).run(guildId, userId, chain).changes > 0;
+}
+
+function removeAllCryptoWallets(guildId, userId) {
+  return db.prepare(`
+    DELETE FROM crypto_wallets WHERE guild_id = ? AND user_id = ?
+  `).run(guildId, userId).changes;
+}
+
 module.exports = {
   db, ensureUser, addBalance, leaderboard,
   getI2cRate, setI2cRate, getExchangeRate, setExchangeRate,
   getUpiId, setUpiId, removeUpiId,
-  getStaffRoleSnapshot, saveStaffRoleSnapshot, removeStaffRoleSnapshot
+  getStaffRoleSnapshot, saveStaffRoleSnapshot, removeStaffRoleSnapshot,
+  getCryptoWallets, setCryptoWallet, removeCryptoWallet, removeAllCryptoWallets
 };
